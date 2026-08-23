@@ -29,6 +29,14 @@ func (s *ClipService) Clip(ctx context.Context, rawURL string) (model.Card, erro
 	if err != nil {
 		return model.Card{}, err
 	}
+	// Reject degenerate results so a partial or failed clip never
+	// silently lands as an empty card.  The original defer-overwrite
+	// bug produced Result{} (both fields empty); a genuinely empty
+	// page would produce Title="Untitled clip" with empty Markdown.
+	// Either way, a clip with no body content is not worth saving.
+	if strings.TrimSpace(res.Markdown) == "" {
+		return model.Card{}, fmt.Errorf("%w: clip returned no content", httpx.ErrValidation)
+	}
 	title := strings.TrimSpace(res.Title)
 	if title == "" {
 		title = "Untitled clip"

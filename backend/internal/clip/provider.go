@@ -89,7 +89,7 @@ func NewReal(timeout time.Duration, maxBytes int64) RealProvider {
 	}
 }
 
-func (r RealProvider) Clip(ctx context.Context, rawURL string) (result Result, err error) {
+func (r RealProvider) Clip(ctx context.Context, rawURL string) (Result, error) {
 	u, err := ValidatePublicURL(rawURL)
 	if err != nil {
 		return Result{}, err
@@ -104,17 +104,13 @@ func (r RealProvider) Clip(ctx context.Context, rawURL string) (result Result, e
 	if err != nil {
 		return Result{}, fmt.Errorf("fetch: %w", err)
 	}
-	defer func() { err = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
+		_ = resp.Body.Close()
 		return Result{}, fmt.Errorf("%w: upstream status %d", httpx.ErrValidation, resp.StatusCode)
 	}
-	limited := io.LimitReader(resp.Body, r.MaxBytes+1)
-	raw, err := io.ReadAll(limited)
+	raw, err := readResponseBody(resp, r.MaxBytes)
 	if err != nil {
 		return Result{}, err
-	}
-	if int64(len(raw)) > r.MaxBytes {
-		return Result{}, fmt.Errorf("%w: response exceeds size limit", httpx.ErrValidation)
 	}
 	if !utf8.Valid(raw) {
 		return Result{}, fmt.Errorf("%w: response is not valid utf-8", httpx.ErrValidation)
@@ -124,6 +120,30 @@ func (r RealProvider) Clip(ctx context.Context, rawURL string) (result Result, e
 		URL: u.String(), Site: site, Title: title, Markdown: md,
 		ClippedAt: clock.Now(), Provider: "real",
 	}, nil
+}
+
+// readResponseBody reads up to maxBytes+1 from the response body and
+// closes it. The read error is preserved: Body.Close almost always
+// returns nil even after a mid-stream connection reset, so if we let
+// it overwrite a genuine read error the caller would see (nil, nil)
+// and treat a truncated/empty body as a valid result. By closing
+// unconditionally and only surfacing Close's error when there was no
+// read error, the worst case (connection reset mid-body) is reported
+// instead of silently swallowed.
+func readResponseBody(resp *http.Response, maxBytes int64) ([]byte, error) {
+	limited := io.LimitReader(resp.Body, maxBytes+1)
+	raw, readErr := io.ReadAll(limited)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read body: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close body: %w", closeErr)
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("%w: response exceeds size limit", httpx.ErrValidation)
+	}
+	return raw, nil
 }
 
 func fixtureName(host, path string) string {
