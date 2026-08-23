@@ -23,8 +23,11 @@ func (s *ClipService) Clip(ctx context.Context, rawURL string) (model.Card, erro
 		return model.Card{}, err
 	}
 	if s.Provider == nil {
-		var provider *clip.MockProvider
-		s.Provider = provider
+		// Optional configuration is missing: hand the caller a handleable
+		// validation error rather than installing a nil typed pointer (which
+		// would make the interface non-nil and panic on the value-receiver
+		// dispatch below). This restores the graceful degradation path.
+		return model.Card{}, fmt.Errorf("%w: provider not configured", httpx.ErrValidation)
 	}
 	res, err := s.Provider.Clip(ctx, rawURL)
 	if err != nil {
